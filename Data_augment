@@ -1,0 +1,221 @@
+import rasterio
+import geopandas as gpd
+from shapely.affinity import rotate, scale, translate
+from shapely.geometry import box
+import numpy as np
+import scipy.ndimage as ndimage
+import random
+from scipy.ndimage import zoom
+from PIL import ImageEnhance, Image
+
+with rasterio.open(r'1. split-array Bachelors project\split-array aerial images\664_54_7525_2024.tif') as src:
+    img_array = src.read() # Form: (Bands, Height, Width)
+    transform = src.transform
+    bounds = src.bounds
+    crs = src.crs
+
+gdf1 = gpd.read_file(r'Trainlayers\Trainlayers\Test_Fagersta.gpkg')
+gdf2 = gpd.read_file(r'1. split-array Bachelors project\split-array GIS layers\data_split_array_examples.gpkg')
+
+assert gdf1.crs == crs, "CRS matchar inte mellan TIFF och GPKG 1!"
+
+# Beräkna TIFF-bildens mittpunkt (Geografiska koordinater)
+center_x = (bounds.left + bounds.right) / 2.0
+center_y = (bounds.top + bounds.bottom) / 2.0
+origin = (center_x, center_y)
+
+# Skapa en polygon av bounding boxen
+bbox = box(bounds.left, bounds.bottom, bounds.right, bounds.top)
+# --- 4. Klipp eller filtrera ---
+
+# Alternativ B: Klipp geometrin exakt
+gdf2_clipped = gpd.clip(gdf2, bbox)
+
+
+
+# Raster: Vänd på Width-axeln (Axel 2 i Rasterio's [Band, H, W])
+img_flipped_h = img_array[:, :, ::-1]
+
+# Vektor: Skala X med -1 runt TIFFens origo
+gdf1_flipped_h = gdf1.copy()
+gdf1_flipped_h.geometry = gdf1.geometry.apply(
+    lambda geom: scale(geom, xfact=-1.0, yfact=1.0, origin=origin)
+)
+# Vektor: Skala X med -1 runt TIFFens origo
+gdf2_flipped_h = gdf2_clipped.copy()
+gdf2_flipped_h.geometry = gdf2_clipped.geometry.apply(
+    lambda geom: scale(geom, xfact=-1.0, yfact=1.0, origin=origin)
+)
+
+# Raster: Vänd på Height-axeln (Axel 1)
+img_flipped_v = img_array[:, ::-1, :]
+
+# Vektor: Skala Y med -1 runt TIFFens origo
+gdf1_flipped_v = gdf1.copy()
+gdf1_flipped_v.geometry = gdf1.geometry.apply(
+    lambda geom: scale(geom, xfact=1.0, yfact=-1.0, origin=origin)
+)
+# Vektor: Skala Y med -1 runt TIFFens origo
+gdf2_flipped_v = gdf2_clipped.copy()
+gdf2_flipped_v.geometry = gdf2_clipped.geometry.apply(
+    lambda geom: scale(geom, xfact=1.0, yfact=-1.0, origin=origin)
+)
+
+
+angle = 90 # Grader
+
+# Raster: Rotera arrayen (kalkylera om axlarna)
+# För 90 grader är np.rot90 bäst och snabbast. För godtyckliga vinklar: ndimage.rotate
+# Notera: np.rot90 roterar i arrayens plan (H, W), så axlarna är (1, 2)
+img_rotated = np.rot90(img_array, k=1, axes=(1, 2)) 
+
+# Vektor: Shapely roterar moturs som standard.
+gdf1_rotated = gdf1.copy()
+gdf1_rotated.geometry = gdf1.geometry.apply(
+    lambda geom: rotate(geom, angle=angle, origin=origin)
+)
+# Vektor: Shapely roterar moturs som standard.
+gdf2_rotated = gdf2_clipped.copy()
+gdf2_rotated.geometry = gdf2_clipped.geometry.apply(
+    lambda geom: rotate(geom, angle=angle, origin=origin)
+)
+
+# Anges i pixlar för raster, men i kart-enheter (t.ex. meter) för vektor!
+pixel_shift_x = 50
+pixel_shift_y = -30
+
+# Omvandla pixelskift till geografiskt skift (dx, dy)
+# transform[0] är pixelbredd, transform[4] är pixelhöjd (ofta negativ)
+dx = pixel_shift_x * transform[0]
+dy = pixel_shift_y * transform[4] 
+
+# Raster: Shifta pixlar (fyller tomrum med 0)
+img_translated = np.zeros_like(img_array)
+for i in range(img_array.shape[0]):
+    img_translated[i] = ndimage.shift(img_array[i], shift=(pixel_shift_y, pixel_shift_x), cval=0)
+
+# Vektor: Flytta geometrier
+gdf1_translated = gdf1.copy()
+gdf1_translated.geometry = gdf1.geometry.apply(
+    lambda geom: translate(geom, xoff=dx, yoff=dy)
+)
+# Vektor: Flytta geometrier
+gdf2_translated = gdf2_clipped.copy()
+gdf2_translated.geometry = gdf2_translated.geometry.apply(
+    lambda geom: translate(geom, xoff=dx, yoff=dy)
+)
+
+def augmentation(image, gdf1, gdf2, origin):
+    prob = [random.randint(0,1) for i in range(6)]
+    ima = image.copy().astype(np.float32)
+    img_array =  src.read() # Form: (Bands, Height, Width)
+    gdf1c = gdf1.copy()
+    gdf2c = gdf2.copy()
+    if prob[0] == 1:
+        # Raster: Vänd på Width-axeln (Axel 2 i Rasterio's [Band, H, W])
+        ima= ima[:, :, ::-1]
+
+        # Vektor: Skala X med -1 runt TIFFens origo
+        gdf1c = gdf1c.geometry.apply(lambda geom: scale(geom, xfact=-1.0, yfact=1.0, origin=origin))
+        # Vektor: Skala X med -1 runt TIFFens origo
+        gdf2c.geometry = gdf2c.geometry.apply(lambda geom: scale(geom, xfact=-1.0, yfact=1.0, origin=origin))
+    if prob[1]==1:
+        ima = image[:, ::-1, :]
+        # Vektor: Skala Y med -1 runt TIFFens origo
+        gdf1c.geometry = gdf1.geometry.apply(lambda geom: scale(geom, xfact=1.0, yfact=-1.0, origin=origin))
+        # Vektor: Skala Y med -1 runt TIFFens origo
+        gdf2c.geometry = gdf2c.geometry.apply(lambda geom: scale(geom, xfact=1.0, yfact=-1.0, origin=origin))
+    if prob[2]==1:
+        angles = [90,180,270] # Grader
+        angle = angles[random.randint(0,2)]
+
+        # Raster: Rotera arrayen (kalkylera om axlarna)
+        # För 90 grader är np.rot90 bäst och snabbast. För godtyckliga vinklar: ndimage.rotate
+        # Notera: np.rot90 roterar i arrayens plan (H, W), så axlarna är (1, 2)
+        ima = np.rot90(ima, k=1, axes=(1, 2)) 
+
+        # Vektor: Shapely roterar moturs som standard.
+        gdf1c.geometry = gdf1c.geometry.apply(lambda geom: rotate(geom, angle=angle, origin=origin))
+        # Vektor: Shapely roterar moturs som standard.
+        gdf2c.geometry = gdf2c.geometry.apply(lambda geom: rotate(geom, angle=angle, origin=origin))
+    
+    if prob[3] == 1:
+        # Anges i pixlar för raster, men i kart-enheter (t.ex. meter) för vektor!
+        pixel_shift_x = 50
+        pixel_shift_y = -30
+
+        # Omvandla pixelskift till geografiskt skift (dx, dy)
+        # transform[0] är pixelbredd, transform[4] är pixelhöjd (ofta negativ)
+        dx = pixel_shift_x * transform[0]
+        dy = pixel_shift_y * transform[4] 
+
+        # Raster: Shifta pixlar (fyller tomrum med 0)
+        img_translated = np.zeros_like(ima)
+        for i in range(img_array.shape[0]):
+            img_translated[i] = ndimage.shift(img_array[i], shift=(pixel_shift_y, pixel_shift_x), cval=0)
+        ima= img_translated[i]
+        # Vektor: Flytta geometrier
+        gdf1c.geometry = gdf1c.geometry.apply(lambda geom: translate(geom, xoff=dx, yoff=dy))
+        # Vektor: Flytta geometrier
+        gdf2c.geometry = gdf2c.geometry.apply(lambda geom: translate(geom, xoff=dx, yoff=dy))
+    if prob[4] == 1:
+        sigma = random.uniform(0.5, 2)
+        blurred = np.zeros_like(ima)
+        for i in range(ima.shape[0]):
+            blurred[i] = ndimage.gaussian_filter(ima[i], sigma = sigma)
+        ima = blurred
+    
+    if prob[5] == 1:
+        # Läs in, öka saturationen med 50% (1.5) och spara direkt på en enda rad
+        satlist = [0.2, 0.5, 0.8, 1.2, 1.5, 1.8]
+        ima = ImageEnhance.Color(ima).enhance(satlist[random.randint(0,5)])
+
+    if prob[6] == 1:
+        scale_factor = 0.5  # Exempel: 50% storlek
+
+        # 1. SKALA OM BILD-ARRAYEN (Raster)
+        # Eftersom arrayen har formen (Bands, H, W) skalar vi de två sista dimensionerna
+        # Vi skalar inte 'Bands'-dimensionen (därav 1 i början)
+        new_img_array = zoom(img_array, (1, scale_factor, scale_factor), order=1) # order=1 är bilinjär
+
+        # 2. BERÄKNA NY TRANSFORM
+        # Vi utgår från din ursprungliga transform. 
+        # Vi skalar den med inversen av scale_factor för att den geografiska täckningen ska förbli densamma
+        new_transform = transform * transform.scale((1 / scale_factor),(1 / scale_factor))
+        gdf1c.geometry = gdf1c.geometry.apply(lambda geom: scale(geom, x_fact= scale_factor, y_fact= scale_factor, origin = origin))
+        gdf2c.geometry = gdf2c.geometry.apply(lambda geom: scale(geom, x_fact= scale_factor, y_fact= scale_factor, origin = origin))
+
+            # 3. SPARA DEN NYA TIFF-FILEN
+        # Vi skapar en ny metadata-dict baserat på dina variabler
+        new_meta = {
+        'driver': 'GTiff',
+        'dtype': new_img_array.dtype,
+        'nodata': 0, # Eller vad din fil nu har
+        'width': new_img_array.shape[2],
+        'height': new_img_array.shape[1],
+        'count': new_img_array.shape[0],
+        'crs': crs,
+        'transform': new_transform}
+
+    if prob[6] == 1:
+        factor = random.uniform(0.8, 1.2)  # adjust brightness
+        ima = ima * factor
+
+        # Optional: clip values to valid range
+        ima = np.clip(ima, 0, 255)
+        
+    return new_meta, gdf1c, gdf2c
+
+with rasterio.open('skalad_bild.tif', 'w', **new_meta) as dst:
+    dst.write(new_img_array)
+
+# # Detta slår ihop alla geometrier till en enda (GeometryCollection eller MultiPolygon)
+# combined_geometry = gdf.geometry.union_all()
+
+# # 2. Hitta mittpunkten för hela det sammanslagna objektet
+# common_point = combined_geometry.centroid
+# aug = gdf.copy()
+# aug.geometry = aug.rotate(45, origin = (0, 0))
+# aug.geometry = aug.translate(10)
+# final_gdf = pandas.concat([gdf, aug])
+# final_gdf.to_file("augmented_data.gpkg", driver="GPKG", engine="pyogrio")
