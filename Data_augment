@@ -106,7 +106,7 @@ gdf2_translated.geometry = gdf2_translated.geometry.apply(
 )
 
 def augmentation(image, gdf1, gdf2, origin):
-    prob = [random.randint(0,1) for i in range(6)]
+    prob = [random.randint(0,1) for i in range(7)]
     ima = image.copy().astype(np.float32)
     img_array =  src.read() # Form: (Bands, Height, Width)
     gdf1c = gdf1.copy()
@@ -169,8 +169,15 @@ def augmentation(image, gdf1, gdf2, origin):
         # Läs in, öka saturationen med 50% (1.5) och spara direkt på en enda rad
         satlist = [0.2, 0.5, 0.8, 1.2, 1.5, 1.8]
         ima = ImageEnhance.Color(ima).enhance(satlist[random.randint(0,5)])
-
+    
     if prob[6] == 1:
+        factor = random.uniform(0.8, 1.2)  # adjust brightness
+        ima = ima * factor
+
+        # Optional: clip values to valid range
+        ima = np.clip(ima, 0, 255)
+
+    if prob[7] == 1:
         scale_factor = 0.5  # Exempel: 50% storlek
 
         # 1. SKALA OM BILD-ARRAYEN (Raster)
@@ -196,13 +203,6 @@ def augmentation(image, gdf1, gdf2, origin):
         'count': new_img_array.shape[0],
         'crs': crs,
         'transform': new_transform}
-
-    if prob[6] == 1:
-        factor = random.uniform(0.8, 1.2)  # adjust brightness
-        ima = ima * factor
-
-        # Optional: clip values to valid range
-        ima = np.clip(ima, 0, 255)
         
     return new_meta, gdf1c, gdf2c
 
